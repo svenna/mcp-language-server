@@ -65,13 +65,39 @@ if [[ -z "$MCP_BINARY" ]]; then
 fi
 echo "✅ mcp-language-server found at: $MCP_BINARY"
 
-# Find available port
+# Find available port (efficient approach)
 echo ""
 echo "🔍 Finding available port..."
+
+# Function to check if port is available
+port_available() {
+    local port=$1
+    # Use ss (faster than lsof) or netstat as fallback
+    if command -v ss >/dev/null 2>&1; then
+        ! ss -tln | grep -q ":$port "
+    elif command -v netstat >/dev/null 2>&1; then
+        ! netstat -tln | grep -q ":$port "
+    else
+        # Fallback to lsof if neither ss nor netstat available
+        ! lsof -i :$port >/dev/null 2>&1
+    fi
+}
+
+# Start from 8081 and find first available port
 PORT=8081
-while lsof -i :$PORT >/dev/null 2>&1; do
+MAX_PORT=8099
+while [ $PORT -le $MAX_PORT ]; do
+    if port_available $PORT; then
+        break
+    fi
     PORT=$((PORT + 1))
 done
+
+if [ $PORT -gt $MAX_PORT ]; then
+    echo "❌ No available ports found in range 8081-$MAX_PORT"
+    exit 1
+fi
+
 echo "✅ Using port: $PORT"
 
 # Create .mcp.json
@@ -103,10 +129,21 @@ if [[ ! -f ".mcp.json" ]]; then
     exit 1
 fi
 
-# Extract port from .mcp.json URL
-PORT=$(grep '"url"' .mcp.json | sed 's/.*localhost:\([0-9]*\).*/\1/')
-if [[ -z "$PORT" ]]; then
-    echo "❌ Could not extract port from .mcp.json"
+# Extract port from .mcp.json URL (secure JSON parsing)
+if command -v jq >/dev/null 2>&1; then
+    # Use jq for secure JSON parsing
+    PORT=$(jq -r '.mcpServers["mcp-language-server"].url' .mcp.json 2>/dev/null | grep -oE '[0-9]+' | head -1)
+else
+    # Fallback to safer regex with input validation
+    URL=$(grep -o '"url"[[:space:]]*:[[:space:]]*"[^"]*"' .mcp.json | cut -d'"' -f4)
+    if [[ "$URL" =~ ^http://localhost:([0-9]+)(/.*)?$ ]]; then
+        PORT="${BASH_REMATCH[1]}"
+    fi
+fi
+
+if [[ -z "$PORT" || ! "$PORT" =~ ^[0-9]+$ ]]; then
+    echo "❌ Could not extract valid port from .mcp.json"
+    echo "   Expected format: http://localhost:PORT/sse"
     exit 1
 fi
 
@@ -122,20 +159,48 @@ if lsof -i :$PORT > /dev/null 2>&1; then
     exit 0
 fi
 
-# Find MCP binary
+# Find and validate MCP binary
+validate_binary() {
+    local binary_path="$1"
+    
+    # Check if file exists and is executable
+    if [[ ! -x "$binary_path" ]]; then
+        return 1
+    fi
+    
+    # Basic file type validation (should be a binary executable)
+    if command -v file >/dev/null 2>&1; then
+        local file_type=$(file "$binary_path" 2>/dev/null)
+        if [[ "$file_type" != *"executable"* ]]; then
+            echo "⚠️  Warning: $binary_path may not be a valid executable"
+            return 1
+        fi
+    fi
+    
+    # Check if binary can show help (basic functional test)
+    if timeout 5 "$binary_path" --help >/dev/null 2>&1; then
+        return 0
+    else
+        echo "⚠️  Warning: $binary_path failed basic functionality test"
+        return 1
+    fi
+}
+
 MCP_BINARY=""
 for location in ~/.local/bin/mcp-language-server ~/go/bin/mcp-language-server /usr/local/bin/mcp-language-server; do
-    if [[ -x "$location" ]]; then
+    if validate_binary "$location"; then
         MCP_BINARY="$location"
         break
     fi
 done
 
 if [[ -z "$MCP_BINARY" ]]; then
-    echo "❌ MCP-LSP binary not found. Expected locations:"
+    echo "❌ Valid MCP-LSP binary not found. Expected locations:"
     echo "   - ~/.local/bin/mcp-language-server"
     echo "   - ~/go/bin/mcp-language-server"
     echo "   - /usr/local/bin/mcp-language-server"
+    echo ""
+    echo "   Binary must be executable and pass basic validation."
     exit 1
 fi
 

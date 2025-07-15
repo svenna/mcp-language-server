@@ -234,7 +234,7 @@ func main() {
 		coreLogger.Fatal("%v", err)
 	}
 
-	server, err := newServer(config)
+	srv, err := newServer(config)
 	if err != nil {
 		coreLogger.Fatal("%v", err)
 	}
@@ -271,16 +271,16 @@ func main() {
 		select {
 		case sig := <-sigChan:
 			coreLogger.Info("Received signal %v in PID: %d", sig, os.Getpid())
-			cleanup(server, done)
+			cleanup(srv, done)
 		case <-parentDeath:
 			coreLogger.Info("Parent death detected, initiating shutdown")
-			cleanup(server, done)
+			cleanup(srv, done)
 		}
 	}()
 
-	if err := server.start(); err != nil {
+	if err := srv.start(); err != nil {
 		coreLogger.Error("Server error: %v", err)
-		cleanup(server, done)
+		cleanup(srv, done)
 		os.Exit(1)
 	}
 
