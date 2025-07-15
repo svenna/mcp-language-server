@@ -170,6 +170,44 @@ This is an [MCP](https://modelcontextprotocol.io/introduction) server that runs 
   </div>
 </details>
 
+## Transport Options
+
+`mcp-language-server` supports multiple transport methods for connecting to MCP clients:
+
+### Stdio (Default)
+The default stdio transport works with most MCP clients like Claude Desktop:
+
+```bash
+mcp-language-server --workspace /path/to/project --lsp gopls
+```
+
+### Server-Sent Events (SSE)
+For web-based or HTTP clients that support SSE:
+
+```bash
+mcp-language-server --workspace /path/to/project --lsp gopls --transport sse --port 8080
+```
+
+The SSE endpoint will be available at `http://localhost:8080/sse`
+
+### Streamable HTTP
+For HTTP-based clients:
+
+```bash
+mcp-language-server --workspace /path/to/project --lsp gopls --transport http --port 8080 --endpoint /mcp
+```
+
+The HTTP endpoint will be available at `http://localhost:8080/mcp`
+
+### Configuration Options
+
+- `--transport`: Transport method (`stdio`, `sse`, `http`). Default: `stdio`
+- `--host`: Host address for network transports. Default: `localhost`
+- `--port`: Port for network transports. Default: `8080`
+- `--endpoint`: HTTP endpoint path for http transport. Default: `/mcp`
+
+**Security Note**: Network transports default to `localhost` for security. Only bind to external interfaces if you understand the security implications.
+
 ## Tools
 
 - `definition`: Retrieves the complete source code definition of any symbol (function, type, constant, etc.) from your codebase.

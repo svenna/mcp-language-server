@@ -27,6 +27,11 @@ type config struct {
 	lspCommand   string
 	openGlobs    StringArrayFlag
 	lspArgs      []string
+	// Transport configuration
+	transport string // "stdio", "sse", "http"
+	host      string // network interface for network transports
+	port      int    // network port for network transports
+	endpoint  string // HTTP endpoint path for http transport
 }
 
 type mcpServer struct {
@@ -57,6 +62,11 @@ func parseConfig() (*config, error) {
 	flag.StringVar(&cfg.workspaceDir, "workspace", "", "Path to workspace directory")
 	flag.StringVar(&cfg.lspCommand, "lsp", "", "LSP command to run (args should be passed after --)")
 	flag.Var(&cfg.openGlobs, "open", "Glob of files to open by default (can specify more than once)")
+	// Transport configuration flags
+	flag.StringVar(&cfg.transport, "transport", "stdio", "Transport method: stdio, sse, or http")
+	flag.StringVar(&cfg.host, "host", "localhost", "Host address for network transports")
+	flag.IntVar(&cfg.port, "port", 8080, "Port for network transports")
+	flag.StringVar(&cfg.endpoint, "endpoint", "/mcp", "HTTP endpoint path for http transport")
 	flag.Parse()
 
 	// Get remaining args after -- as LSP arguments
@@ -84,6 +94,24 @@ func parseConfig() (*config, error) {
 
 	if _, err := exec.LookPath(cfg.lspCommand); err != nil {
 		return nil, fmt.Errorf("LSP command not found: %s", cfg.lspCommand)
+	}
+
+	// Validate transport configuration
+	switch cfg.transport {
+	case "stdio", "sse", "http":
+		// Valid transport types
+	default:
+		return nil, fmt.Errorf("invalid transport type: %s (must be stdio, sse, or http)", cfg.transport)
+	}
+
+	// Validate network configuration for network transports
+	if cfg.transport == "sse" || cfg.transport == "http" {
+		if cfg.port <= 0 || cfg.port > 65535 {
+			return nil, fmt.Errorf("invalid port: %d (must be 1-65535)", cfg.port)
+		}
+		if cfg.host == "" {
+			return nil, fmt.Errorf("host is required for network transports")
+		}
 	}
 
 	return cfg, nil
@@ -172,7 +200,26 @@ func (s *mcpServer) start() error {
 		return fmt.Errorf("tool registration failed: %v", err)
 	}
 
-	return server.ServeStdio(s.mcpServer)
+	// Start the appropriate transport
+	switch s.config.transport {
+	case "stdio", "":
+		coreLogger.Info("Starting MCP server with stdio transport")
+		return server.ServeStdio(s.mcpServer)
+	case "sse":
+		addr := fmt.Sprintf("%s:%d", s.config.host, s.config.port)
+		coreLogger.Info("Starting MCP server with SSE transport on %s", addr)
+		sseServer := server.NewSSEServer(s.mcpServer)
+		return sseServer.Start(addr)
+	case "http":
+		addr := fmt.Sprintf("%s:%d", s.config.host, s.config.port)
+		coreLogger.Info("Starting MCP server with StreamableHTTP transport on %s%s", addr, s.config.endpoint)
+		httpServer := server.NewStreamableHTTPServer(s.mcpServer,
+			server.WithEndpointPath(s.config.endpoint),
+		)
+		return httpServer.Start(addr)
+	default:
+		return fmt.Errorf("unsupported transport type: %s", s.config.transport)
+	}
 }
 
 func main() {

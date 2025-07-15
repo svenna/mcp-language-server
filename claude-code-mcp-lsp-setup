@@ -81,22 +81,8 @@ cat > "$PROJECT_DIR/.mcp.json" << EOF
 {
   "mcpServers": {
     "mcp-language-server": {
-      "command": "$MCP_BINARY",
-      "args": [
-        "--workspace",
-        "$PROJECT_DIR",
-        "--lsp",
-        "typescript-language-server",
-        "--transport",
-        "sse",
-        "--port",
-        "$PORT",
-        "--",
-        "--stdio"
-      ],
-      "env": {
-        "LOG_LEVEL": "DEBUG"
-      }
+      "type": "sse",
+      "url": "http://localhost:$PORT/sse"
     }
   }
 }
@@ -117,8 +103,8 @@ if [[ ! -f ".mcp.json" ]]; then
     exit 1
 fi
 
-# Extract port from .mcp.json (simple grep approach)
-PORT=$(grep -o '"[0-9]*"' .mcp.json | grep -o '[0-9]*' | head -1)
+# Extract port from .mcp.json URL
+PORT=$(grep '"url"' .mcp.json | sed 's/.*localhost:\([0-9]*\).*/\1/')
 if [[ -z "$PORT" ]]; then
     echo "❌ Could not extract port from .mcp.json"
     exit 1
@@ -136,22 +122,60 @@ if lsof -i :$PORT > /dev/null 2>&1; then
     exit 0
 fi
 
-# Extract command and args from .mcp.json and start server
-# This is a simplified approach - in production you'd want proper JSON parsing
-MCP_BINARY=$(grep -A 20 '"command"' .mcp.json | grep -o '"[^"]*"' | head -1 | tr -d '"')
+# Find MCP binary
+MCP_BINARY=""
+for location in ~/.local/bin/mcp-language-server ~/go/bin/mcp-language-server /usr/local/bin/mcp-language-server; do
+    if [[ -x "$location" ]]; then
+        MCP_BINARY="$location"
+        break
+    fi
+done
 
-if [[ ! -x "$MCP_BINARY" ]]; then
-    echo "❌ MCP-LSP binary not found or not executable: $MCP_BINARY"
+if [[ -z "$MCP_BINARY" ]]; then
+    echo "❌ MCP-LSP binary not found. Expected locations:"
+    echo "   - ~/.local/bin/mcp-language-server"
+    echo "   - ~/go/bin/mcp-language-server"
+    echo "   - /usr/local/bin/mcp-language-server"
     exit 1
 fi
 
-echo "🔧 Starting server..."
-exec "$MCP_BINARY" \
+echo "🔧 Starting server in background..."
+
+# Create logs directory if it doesn't exist
+mkdir -p "$PROJECT_DIR/.mcp-logs"
+
+# Start server in background with logs
+nohup "$MCP_BINARY" \
     --workspace "$PROJECT_DIR" \
     --lsp typescript-language-server \
     --transport sse \
     --port "$PORT" \
-    -- --stdio
+    -- --stdio \
+    > "$PROJECT_DIR/.mcp-logs/server.log" 2>&1 &
+
+SERVER_PID=$!
+
+# Give server a moment to start
+sleep 2
+
+# Check if server is running
+if kill -0 $SERVER_PID 2>/dev/null; then
+    echo "✅ MCP-LSP server started successfully"
+    echo "📝 PID: $SERVER_PID (saved to .mcp-logs/server.pid)"
+    echo "📋 Logs: .mcp-logs/server.log"
+    echo "🌐 Server: http://localhost:$PORT"
+    echo ""
+    echo "💡 To stop the server:"
+    echo "   kill $SERVER_PID"
+    echo "   # or"
+    echo "   kill \$(cat .mcp-logs/server.pid)"
+    
+    # Save PID for later use
+    echo $SERVER_PID > "$PROJECT_DIR/.mcp-logs/server.pid"
+else
+    echo "❌ Server failed to start. Check .mcp-logs/server.log for details"
+    exit 1
+fi
 EOF
 
 # Make start script executable
@@ -161,8 +185,8 @@ echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "📁 Files created:"
-echo "   - .mcp.json (MCP configuration)"
-echo "   - start-mcp-lsp-server.sh (startup script)"
+echo "   - .mcp.json (MCP configuration - connects to running server)"
+echo "   - start-mcp-lsp-server.sh (daemon startup script)"
 echo ""
 echo "🚀 To start the MCP-LSP server:"
 echo "   ./start-mcp-lsp-server.sh"
@@ -170,4 +194,5 @@ echo ""
 echo "🔗 Server will be available at:"
 echo "   http://localhost:$PORT"
 echo ""
-echo "💡 Add .mcp.json to your .gitignore if needed"
+echo "💡 The server runs as a daemon - your terminal stays free!"
+echo "💡 Add .mcp-logs/ to your .gitignore if needed"
