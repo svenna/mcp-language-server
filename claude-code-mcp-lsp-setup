@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# claude-code-mcp-lsp-setup - MCP Language Server Setup Script for Claude Code
+# Install this script in ~/bin for easy access from any project directory
+
+set -e
+
+PROJECT_DIR="$(pwd)"
+SCRIPT_DIR="$(dirname "$0")"
+
+echo "🚀 Claude Code MCP Language Server Setup"
+echo "Setting up MCP for: $PROJECT_DIR"
+echo ""
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to find mcp-language-server binary
+find_mcp_binary() {
+    local binary_name="mcp-language-server"
+    
+    # Check common locations
+    local locations=(
+        "$(dirname "$0")/$binary_name"
+        "$HOME/go/bin/$binary_name"
+        "$HOME/.local/bin/$binary_name"
+        "/usr/local/bin/$binary_name"
+        "$(which $binary_name 2>/dev/null || echo "")"
+    )
+    
+    for location in "${locations[@]}"; do
+        if [[ -n "$location" && -x "$location" ]]; then
+            echo "$location"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# Dependency verification
+echo "📋 Checking dependencies..."
+
+# Check for typescript-language-server
+if ! command_exists typescript-language-server; then
+    echo "❌ typescript-language-server not found"
+    echo "   Install with: npm install -g typescript-language-server"
+    exit 1
+fi
+echo "✅ typescript-language-server found"
+
+# Check for mcp-language-server binary
+MCP_BINARY=$(find_mcp_binary)
+if [[ -z "$MCP_BINARY" ]]; then
+    echo "❌ mcp-language-server binary not found"
+    echo "   Expected locations:"
+    echo "   - $(dirname "$0")/mcp-language-server"
+    echo "   - $HOME/go/bin/mcp-language-server"
+    echo "   - $HOME/.local/bin/mcp-language-server"
+    echo ""
+    echo "   Build with: go build -o ~/bin/mcp-language-server"
+    exit 1
+fi
+echo "✅ mcp-language-server found at: $MCP_BINARY"
+
+# Find available port
+echo ""
+echo "🔍 Finding available port..."
+PORT=8081
+while lsof -i :$PORT >/dev/null 2>&1; do
+    PORT=$((PORT + 1))
+done
+echo "✅ Using port: $PORT"
+
+# Create .mcp.json
+echo ""
+echo "📝 Creating .mcp.json..."
+cat > "$PROJECT_DIR/.mcp.json" << EOF
+{
+  "mcpServers": {
+    "mcp-language-server": {
+      "command": "$MCP_BINARY",
+      "args": [
+        "--workspace",
+        "$PROJECT_DIR",
+        "--lsp",
+        "typescript-language-server",
+        "--transport",
+        "sse",
+        "--port",
+        "$PORT",
+        "--",
+        "--stdio"
+      ],
+      "env": {
+        "LOG_LEVEL": "DEBUG"
+      }
+    }
+  }
+}
+EOF
+
+# Create start script
+echo "📝 Creating start-mcp-lsp-server.sh..."
+cat > "$PROJECT_DIR/start-mcp-lsp-server.sh" << 'EOF'
+#!/bin/bash
+
+# Start MCP-LSP Bridge Server for this project
+cd "$(dirname "$0")"
+PROJECT_DIR="$(pwd)"
+
+# Read configuration from .mcp.json
+if [[ ! -f ".mcp.json" ]]; then
+    echo "❌ .mcp.json not found. Run claude-code-mcp-lsp-setup first."
+    exit 1
+fi
+
+# Extract port from .mcp.json (simple grep approach)
+PORT=$(grep -o '"[0-9]*"' .mcp.json | grep -o '[0-9]*' | head -1)
+if [[ -z "$PORT" ]]; then
+    echo "❌ Could not extract port from .mcp.json"
+    exit 1
+fi
+
+echo "🚀 Starting MCP-LSP Bridge Server"
+echo "📁 Project: $PROJECT_DIR"
+echo "🌐 Port: $PORT"
+echo ""
+
+# Check if server is already running
+if lsof -i :$PORT > /dev/null 2>&1; then
+    echo "⚠️  MCP-LSP server already running on port $PORT"
+    echo "   Use 'kill \$(lsof -t -i :$PORT)' to stop it"
+    exit 0
+fi
+
+# Extract command and args from .mcp.json and start server
+# This is a simplified approach - in production you'd want proper JSON parsing
+MCP_BINARY=$(grep -A 20 '"command"' .mcp.json | grep -o '"[^"]*"' | head -1 | tr -d '"')
+
+if [[ ! -x "$MCP_BINARY" ]]; then
+    echo "❌ MCP-LSP binary not found or not executable: $MCP_BINARY"
+    exit 1
+fi
+
+echo "🔧 Starting server..."
+exec "$MCP_BINARY" \
+    --workspace "$PROJECT_DIR" \
+    --lsp typescript-language-server \
+    --transport sse \
+    --port "$PORT" \
+    -- --stdio
+EOF
+
+# Make start script executable
+chmod +x "$PROJECT_DIR/start-mcp-lsp-server.sh"
+
+echo ""
+echo "✅ Setup complete!"
+echo ""
+echo "📁 Files created:"
+echo "   - .mcp.json (MCP configuration)"
+echo "   - start-mcp-lsp-server.sh (startup script)"
+echo ""
+echo "🚀 To start the MCP-LSP server:"
+echo "   ./start-mcp-lsp-server.sh"
+echo ""
+echo "🔗 Server will be available at:"
+echo "   http://localhost:$PORT"
+echo ""
+echo "💡 Add .mcp.json to your .gitignore if needed"
