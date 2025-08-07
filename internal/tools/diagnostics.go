@@ -26,20 +26,38 @@ func GetDiagnosticsForFile(ctx context.Context, client *lsp.Client, filePath str
 		return "", fmt.Errorf("could not open file: %v", err)
 	}
 
-	// Wait for diagnostics
-	// TODO: wait for notification
-	time.Sleep(time.Second * 3)
-
 	// Convert the file path to URI format
 	uri := protocol.DocumentUri("file://" + filePath)
 
-	// Request fresh diagnostics
+	// Wait a short time for initial diagnostics to be published
+	// Some language servers (like TypeScript) publish diagnostics via notifications after opening a file
+	waitDuration := 1 * time.Second
+	if envWait := os.Getenv("LSP_DIAGNOSTIC_WAIT_MS"); envWait != "" {
+		if ms, err := strconv.Atoi(envWait); err == nil && ms > 0 {
+			waitDuration = time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	select {
+	case <-time.After(waitDuration):
+		// Continue after wait
+	case <-ctx.Done():
+		return "", fmt.Errorf("context cancelled while waiting for initial diagnostics: %w", ctx.Err())
+	}
+
+	// Try to request fresh diagnostics (not all language servers support this)
+	// Use a short timeout since this is optional
+	diagCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	defer cancel()
+
 	diagParams := protocol.DocumentDiagnosticParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	_, err = client.Diagnostic(ctx, diagParams)
+	_, err = client.Diagnostic(diagCtx, diagParams)
 	if err != nil {
-		toolsLogger.Error("Failed to get diagnostics: %v", err)
+		// This is expected for language servers that don't support pull diagnostics
+		// They use push model via textDocument/publishDiagnostics notifications instead
+		toolsLogger.Debug("Pull diagnostics not supported (this is normal for many language servers): %v", err)
 	}
 
 	// Get diagnostics from the cache

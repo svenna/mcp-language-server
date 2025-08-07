@@ -230,10 +230,15 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 
 	lspLogger.Debug("Waiting for response to request ID: %v", msg.ID)
 
-	// Wait for response
-	resp := <-ch
-
-	lspLogger.Debug("Received response for request ID: %v", msg.ID)
+	// Wait for response with context timeout
+	var resp *Message
+	select {
+	case resp = <-ch:
+		lspLogger.Debug("Received response for request ID: %v", msg.ID)
+	case <-ctx.Done():
+		lspLogger.Error("Request timed out for ID: %v, method: %s", msg.ID, method)
+		return fmt.Errorf("request timed out: %w", ctx.Err())
+	}
 
 	if resp.Error != nil {
 		lspLogger.Error("Request failed: %s (code: %d)", resp.Error.Message, resp.Error.Code)

@@ -170,7 +170,7 @@ func (s *mcpServer) registerTools() error {
 		showLineNumbers := request.GetBool("showLineNumbers", true)
 
 		coreLogger.Debug("Executing diagnostics for file: %s", filePath)
-		text, err := tools.GetDiagnosticsForFile(s.ctx, s.lspClient, filePath, contextLines, showLineNumbers)
+		text, err := tools.GetDiagnosticsForFile(ctx, s.lspClient, filePath, contextLines, showLineNumbers)
 		if err != nil {
 			coreLogger.Error("Failed to get diagnostics: %v", err)
 			return mcp.NewToolResultError(fmt.Sprintf("failed to get diagnostics: %v", err)), nil
